@@ -1,11 +1,12 @@
 import os
 import argparse
 import torch
+import cv2
+import numpy as np
 
 from torchvision import transforms
 from models.fast_scnn import get_fast_scnn
 from PIL import Image
-from utils.visualize import get_color_pallete
 
 parser = argparse.ArgumentParser(
     description='Predict segmentation result from a given image')
@@ -28,27 +29,61 @@ args = parser.parse_args()
 
 
 def demo():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() and not args.cpu else "cpu")
+
     # output folder
     if not os.path.exists(args.outdir):
         os.makedirs(args.outdir)
 
-    # image transform
+    # image transform (for model)
     transform = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        transforms.Normalize([0.485, 0.456, 0.406],
+                             [0.229, 0.224, 0.225]),
     ])
-    image = Image.open(args.input_pic).convert('RGB')
-    image = transform(image).unsqueeze(0).to(device)
-    model = get_fast_scnn(args.dataset, pretrained=True, root=args.weights_folder, map_cpu=args.cpu).to(device)
+
+    # Load image for model
+    pil_img = Image.open(args.input_pic).convert('RGB')
+    pil_img = pil_img.resize((1024, 512))
+    image = transform(pil_img).unsqueeze(0).to(device)
+
+    # Load model
+    model = get_fast_scnn(
+        args.dataset,
+        pretrained=True,
+        root=args.weights_folder,
+        map_cpu=args.cpu
+    ).to(device)
+
     print('Finished loading model!')
     model.eval()
+
+    # Inference
     with torch.no_grad():
         outputs = model(image)
-    pred = torch.argmax(outputs[0], 1).squeeze(0).cpu().data.numpy()
-    mask = get_color_pallete(pred, args.dataset)
-    outname = os.path.splitext(os.path.split(args.input_pic)[-1])[0] + '.png'
-    mask.save(os.path.join(args.outdir, outname))
+
+    # Prediction mask
+    pred = torch.argmax(outputs[0], 1).squeeze(0).cpu().numpy()
+
+    # -------- Drivable Area Overlay (ROAD ONLY) --------
+    road_class_id = 0  # Cityscapes: road = 0
+
+    # Load original image for visualization
+    orig = cv2.imread(args.input_pic)
+    orig = cv2.resize(orig, (1024, 512))
+
+    road_mask = (pred == road_class_id)
+
+    overlay = orig.copy()
+    overlay[road_mask] = [0, 255, 0]  # Green color for drivable area
+
+    alpha = 0.5
+    vis = cv2.addWeighted(orig, 1 - alpha, overlay, alpha, 0)
+
+    outname = os.path.splitext(os.path.split(args.input_pic)[-1])[0] + '_road_overlay.png'
+    cv2.imwrite(os.path.join(args.outdir, outname), vis)
+
+    print(f"✅ Saved drivable area overlay to: {os.path.join(args.outdir, outname)}")
 
 
 if __name__ == '__main__':
