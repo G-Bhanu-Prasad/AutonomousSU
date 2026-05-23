@@ -55,7 +55,7 @@ def demo_video():
     out = cv2.VideoWriter(args.out_video, fourcc, fps, (1024, 512))
 
     road_class_id = 0
-    previous_mask = None   # ✅ Proper temporal smoothing storage
+    previous_mask = None   # Proper temporal smoothing storage
 
     while True:
         ret, frame = cap.read()
